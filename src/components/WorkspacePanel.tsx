@@ -5,45 +5,56 @@ import ReactMarkdown from "react-markdown";
 import { useAuth } from "@/context/AuthContext";
 import { isFirebaseEnabled, db } from "@/lib/firebase";
 import { collection, addDoc, serverTimestamp } from "@firebase/firestore";
-import { 
-  Sparkles, 
-  Copy, 
-  Check, 
-  Download, 
-  Save, 
-  FileText, 
-  RefreshCw, 
-  AlertCircle, 
-  ChevronDown, 
-  BookOpen, 
+import {
+  Sparkles,
+  Copy,
+  Check,
+  Download,
+  Save,
+  FileText,
+  RefreshCw,
+  AlertCircle,
+  ChevronDown,
+  BookOpen,
   AlignLeft,
   Settings,
-  Terminal
+  Terminal,
+  ClipboardList,
+  PencilLine
 } from "lucide-react";
+import { GuidedQA, GuidedAnswers, isGuidedComplete } from "@/components/GuidedQA";
+
+type InputMode = "freeform" | "guided";
 
 // Sample Technical Note Templates to make reviewing incredibly fast & easy
 const TEMPLATES = [
   {
     name: "🚀 Standard Dev Shift (Messy Slack Logs)",
-    rawNotes: `merged the critical dashboard hotfix onto master branch (PR #342) around 2 PM. 
+    rawNotes: `merged the critical dashboard hotfix onto master branch (PR #342) around 2 PM.
 then the Postgres DB CPU usage spiked to 98% because of an unindexed query in workspace-panel.tsx. I ran a migration to add an index on user_id in handoffs table. Resolved!
 also setup the firebase client config file and verified local sandbox bypass works perfectly.
-Still need to fix CSS responsiveness on mobile for the navbar - jane is taking a look at this tomorrow. 
+Still need to fix CSS responsiveness on mobile for the navbar - jane is taking a look at this tomorrow.
 Also forgot to deploy the staging package to hosting. Someone needs to run npm run build on main.`
   },
   {
     name: "📅 Daily Standup Brainstorm (Raw Thoughts)",
-    rawNotes: `Yesterday: I battled with React Markdown and Tailwind v4 theme configurations. Got custom glow animations working in globals.css. 
+    rawNotes: `Yesterday: I battled with React Markdown and Tailwind v4 theme configurations. Got custom glow animations working in globals.css.
 Today: Working on the AuthScreen component. Want to implement the demo sign-in bypass so charlie doesn't have to fill in forms. Afterwards, I'll work on the API endpoint /api/transform-notes.
 Blockers: Gemini API key has rate limit alerts on my dashboard. Hope it doesn't crash during the review!`
   },
   {
     name: "🐛 Outage Incident Report (Unstructured)",
-    rawNotes: `We got a Datadog alert at 04:12 AM about API router returning 500s. 
+    rawNotes: `We got a Datadog alert at 04:12 AM about API router returning 500s.
 I looked at the logs, it was a Gemini API timeout in /api/transform-notes because of a massive payload (user tried to paste a 10MB text file).
-I wrote a quick input length validator on the backend to cap character count at 12,000 characters. 
-Also redeployed the serverless route on Vercel. 
+I wrote a quick input length validator on the backend to cap character count at 12,000 characters.
+Also redeployed the serverless route on Vercel.
 Need to update the front-end textarea today to enforce max-length as well and show a red alert box.`
+  },
+  {
+    name: "🩺 Guided Shift Note (Pre-filled Answers)",
+    // Special marker — when this template is picked and we're in guided mode
+    // the WorkspacePanel will pre-fill the Q&A fields instead of the textarea.
+    rawNotes: "__guided__"
   }
 ];
 
@@ -66,17 +77,25 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
   onClearActiveHistory
 }) => {
   const { user, isFallbackMode } = useAuth();
-  
+
   // Workspace states
   const [rawNotes, setRawNotes] = useState<string>("");
   const [format, setFormat] = useState<string>("handover");
   const [tone, setTone] = useState<string>("professional");
-  
+  const [mode, setMode] = useState<InputMode>("freeform");
+  const [guidedAnswers, setGuidedAnswers] = useState<GuidedAnswers>({
+    activity: "",
+    behaviour: "",
+    support: "",
+    outcome: "",
+    extra: "",
+  });
+
   // Output and processing states
   const [transformedOutput, setTransformedOutput] = useState<string>("");
   const [isTransforming, setIsTransforming] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  
+
   // Actions states
   const [copied, setCopied] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
@@ -100,9 +119,26 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
   const handleApplyTemplate = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const selectedIndex = parseInt(e.target.value);
     if (!isNaN(selectedIndex) && TEMPLATES[selectedIndex]) {
-      setRawNotes(TEMPLATES[selectedIndex].rawNotes);
+      const tpl = TEMPLATES[selectedIndex];
+      if (tpl.rawNotes === "__guided__") {
+        // Switch to guided mode and pre-fill answers with a realistic example
+        setMode("guided");
+        setGuidedAnswers({
+          activity:
+            "Supported John and Sarah with a morning cooking group. They made sandwiches and fresh orange juice. Sarah engaged well, John needed prompting to stay on task but completed his portion.",
+          behaviour:
+            "No. Both participants were calm throughout. John showed mild frustration once when the toaster jammed, but recovered quickly after a 2-minute break.",
+          support:
+            "Used positive prompting, demonstrated each step, offered 1:1 time with John, then re-joined the group. Applied low-arousal approach when John was briefly frustrated.",
+          outcome:
+            "Both participants finished the activity, ate lunch together, and were in a positive mood at handover.",
+          extra: "John (participant A), Sarah (participant B). Morning shift, 7am–3pm at the day centre.",
+        });
+      } else {
+        setMode("freeform");
+        setRawNotes(tpl.rawNotes);
+      }
       setErrorMsg(null);
-      // Reset output if loaded new template
       setTransformedOutput("");
       setHasSavedCurrent(false);
       onClearActiveHistory();
@@ -111,9 +147,16 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
 
   // Perform AI note transformation
   const handleTransform = async () => {
-    if (!rawNotes.trim()) {
-      setErrorMsg("Please enter or select some notes to transform first.");
-      return;
+    if (mode === "guided") {
+      if (!isGuidedComplete(guidedAnswers)) {
+        setErrorMsg("Please answer all four questions before generating a shift note.");
+        return;
+      }
+    } else {
+      if (!rawNotes.trim()) {
+        setErrorMsg("Please enter or select some notes to transform first.");
+        return;
+      }
     }
 
     setIsTransforming(true);
@@ -122,10 +165,15 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
     setHasSavedCurrent(false);
 
     try {
+      const payload =
+        mode === "guided"
+          ? { mode, answers: guidedAnswers, format: "shift-notes", tone }
+          : { mode, notes: rawNotes, format, tone };
+
       const response = await fetch("/api/transform-notes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ notes: rawNotes, format, tone })
+        body: JSON.stringify(payload)
       });
 
       const data = await response.json();
@@ -176,13 +224,28 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
   const handleSaveToHistory = async () => {
     if (!transformedOutput || !user) return;
     setIsSaving(true);
-    
+
     try {
+      // For guided mode, persist the worker's answers as the "raw notes" so
+      // history items remain readable and re-loadable.
+      const sourceNotes =
+        mode === "guided"
+          ? [
+              "Q1 — Activity: " + (guidedAnswers.activity || ""),
+              "Q2 — Behavioural incident: " + (guidedAnswers.behaviour || ""),
+              "Q3 — Support provided: " + (guidedAnswers.support || ""),
+              "Q4 — Outcome: " + (guidedAnswers.outcome || ""),
+              guidedAnswers.extra ? "Context: " + guidedAnswers.extra : "",
+            ]
+              .filter(Boolean)
+              .join("\n")
+          : rawNotes;
+
       const payload = {
         uid: user.uid,
-        rawNotes,
+        rawNotes: sourceNotes,
         transformedContent: transformedOutput,
-        format,
+        format: mode === "guided" ? "shift-notes" : format,
         tone,
         createdAt: new Date().toISOString()
       };
@@ -220,7 +283,48 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
 
   return (
     <div className="space-y-6">
-      
+
+      {/* Mode Toggle (Free-Form vs Guided Q&A) */}
+      <div className="glass-panel p-3 rounded-xl flex flex-wrap items-center gap-3 justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Input mode</span>
+        </div>
+        <div className="inline-flex p-1 bg-zinc-900/70 border border-white/10 rounded-xl gap-1">
+          <button
+            type="button"
+            onClick={() => {
+              setMode("freeform");
+              setErrorMsg(null);
+            }}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+              mode === "freeform"
+                ? "bg-indigo-500/15 text-indigo-200 border border-indigo-500/30"
+                : "text-zinc-400 hover:text-white border border-transparent"
+            }`}
+            title="Paste free-form messy notes and let the AI restructure them"
+          >
+            <PencilLine className="w-3.5 h-3.5" />
+            <span>Free-Form Notes</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setMode("guided");
+              setErrorMsg(null);
+            }}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+              mode === "guided"
+                ? "bg-emerald-500/15 text-emerald-200 border border-emerald-500/30"
+                : "text-zinc-400 hover:text-white border border-transparent"
+            }`}
+            title="Answer 4 simple questions and the AI generates a structured shift note"
+          >
+            <ClipboardList className="w-3.5 h-3.5" />
+            <span>Guided Shift Note</span>
+          </button>
+        </div>
+      </div>
+
       {/* Configuration Header Controls */}
       <div className="glass-panel p-4 rounded-xl flex flex-wrap gap-4 items-center justify-between">
         
@@ -293,13 +397,20 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
         <div className="glass-panel rounded-2xl p-5 flex flex-col h-[520px] relative">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
-              <AlignLeft className="w-4 h-4 text-indigo-400" />
-              <h3 className="text-sm font-bold text-white tracking-wide uppercase">Raw Input Workspace</h3>
+              {mode === "guided" ? (
+                <ClipboardList className="w-4 h-4 text-emerald-400" />
+              ) : (
+                <AlignLeft className="w-4 h-4 text-indigo-400" />
+              )}
+              <h3 className="text-sm font-bold text-white tracking-wide uppercase">
+                {mode === "guided" ? "Guided Q&A Workspace" : "Raw Input Workspace"}
+              </h3>
             </div>
-            
+
             <button
               onClick={() => {
                 setRawNotes("");
+                setGuidedAnswers({ activity: "", behaviour: "", support: "", outcome: "", extra: "" });
                 setTransformedOutput("");
                 setHasSavedCurrent(false);
                 onClearActiveHistory();
@@ -310,30 +421,44 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
             </button>
           </div>
 
-          <textarea
-            value={rawNotes}
-            onChange={(e) => {
-              setRawNotes(e.target.value);
-              setHasSavedCurrent(false);
-            }}
-            placeholder="Type or paste your messy developer logs, terminal outputs, DB migration scripts, or standup blurbs here... (Use the load template dropdown above for a quick test!)"
-            className="flex-1 bg-zinc-950/40 border border-white/5 focus:border-indigo-500/50 rounded-xl p-4 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none resize-none focus:ring-1 focus:ring-indigo-500/20 transition leading-relaxed"
-          />
-
-          <div className="flex items-center justify-between mt-3 text-xs text-zinc-500 font-mono">
-            <div>
-              <span>Words: {rawNotes.trim() === "" ? 0 : rawNotes.trim().split(/\s+/).length}</span>
-              <span className="mx-2">•</span>
-              <span>Chars: {rawNotes.length}</span>
+          {mode === "guided" ? (
+            <div className="flex-1 overflow-y-auto pr-1 -mr-1">
+              <GuidedQA answers={guidedAnswers} onChange={(a) => {
+                setGuidedAnswers(a);
+                setHasSavedCurrent(false);
+              }} />
             </div>
-            <span className="text-[10px] text-zinc-600">Supports markdown logs</span>
-          </div>
+          ) : (
+            <>
+              <textarea
+                value={rawNotes}
+                onChange={(e) => {
+                  setRawNotes(e.target.value);
+                  setHasSavedCurrent(false);
+                }}
+                placeholder="Type or paste your messy developer logs, terminal outputs, DB migration scripts, or standup blurbs here... (Use the load template dropdown above for a quick test!)"
+                className="flex-1 bg-zinc-950/40 border border-white/5 focus:border-indigo-500/50 rounded-xl p-4 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none resize-none focus:ring-1 focus:ring-indigo-500/20 transition leading-relaxed"
+              />
+
+              <div className="flex items-center justify-between mt-3 text-xs text-zinc-500 font-mono">
+                <div>
+                  <span>Words: {rawNotes.trim() === "" ? 0 : rawNotes.trim().split(/\s+/).length}</span>
+                  <span className="mx-2">•</span>
+                  <span>Chars: {rawNotes.length}</span>
+                </div>
+                <span className="text-[10px] text-zinc-600">Supports markdown logs</span>
+              </div>
+            </>
+          )}
 
           {/* Glowing CTA Button inside left pane at bottom right */}
           <div className="absolute bottom-5 right-5">
             <button
               onClick={handleTransform}
-              disabled={isTransforming || !rawNotes.trim()}
+              disabled={
+                isTransforming ||
+                (mode === "guided" ? !isGuidedComplete(guidedAnswers) : !rawNotes.trim())
+              }
               className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:from-zinc-800 disabled:to-zinc-800 text-white disabled:text-zinc-500 rounded-xl px-5 py-2.5 text-xs font-bold shadow-lg shadow-indigo-600/10 hover:shadow-indigo-600/20 active:scale-[0.97] transition duration-200 flex items-center gap-2 cursor-pointer disabled:cursor-not-allowed group relative overflow-hidden"
             >
               {isTransforming ? (
@@ -344,7 +469,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
               ) : (
                 <>
                   <Sparkles className="w-4 h-4 text-indigo-200 group-hover:scale-110 transition duration-200" />
-                  <span>Transform Draft</span>
+                  <span>{mode === "guided" ? "Generate Shift Note" : "Transform Draft"}</span>
                 </>
               )}
             </button>

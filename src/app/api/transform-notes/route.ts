@@ -3,13 +3,25 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export async function POST(req: Request) {
   try {
-    const { notes, format, tone } = await req.json();
+    const body = await req.json();
+    const { notes, format, tone, mode, answers } = body;
 
-    if (!notes || typeof notes !== "string" || notes.trim() === "") {
-      return NextResponse.json(
-        { error: "Notes content is required." },
-        { status: 400 }
-      );
+    if (mode === "guided") {
+      // For guided Q&A mode, we need answers — not raw notes
+      if (!answers || typeof answers !== "object") {
+        return NextResponse.json(
+          { error: "Guided answers are required in guided mode." },
+          { status: 400 }
+        );
+      }
+    } else {
+      // Free-form mode: validate raw notes
+      if (!notes || typeof notes !== "string" || notes.trim() === "") {
+        return NextResponse.json(
+          { error: "Notes content is required." },
+          { status: 400 }
+        );
+      }
     }
 
     const apiKey = process.env.GEMINI_API_KEY;
@@ -18,8 +30,9 @@ export async function POST(req: Request) {
     if (isMockMode) {
       // Simulate highly realistic AI notes transformer for the reviewer/developer
       await new Promise((r) => setTimeout(r, 1200)); // AI-like delay
-      
-      const mockResult = generateMockTransformation(notes, format || "handover", tone || "professional");
+
+      const effectiveFormat = mode === "guided" ? "shift-notes" : (format || "handover");
+      const mockResult = generateMockTransformation(notes || "", effectiveFormat, tone || "professional", answers);
       return NextResponse.json({
         text: mockResult,
         isMock: true,
@@ -29,7 +42,7 @@ export async function POST(req: Request) {
 
     // Initialize Gemini AI
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ 
+    const model = genAI.getGenerativeModel({
       model: "gemini-2.5-flash",
       generationConfig: {
         temperature: 0.2, // Keep it highly structured and deterministic
@@ -40,7 +53,8 @@ export async function POST(req: Request) {
       "handover": "Create an ultra-premium Shift Handover report. Organize it with these exact sections: '🚀 Executive Summary', '📦 Completed Work', '⚠️ Blockers & Risks', and '📅 Next Steps / Handover Checklist'.",
       "standup": "Create a clear, high-density Daily Standup summary. Use standard sections: 'Yesterday (What I Did)', 'Today (What I am Doing)', and 'Blockers'. Keep it concise and punchy.",
       "release-notes": "Generate clean, beautifully formatted release notes for engineering stakeholders. Include sections: '🆕 What\\'s New', '🛠️ Under the Hood', '🐛 Bug Fixes', and '⚡ Performance & Security'. Use markdown tables where appropriate.",
-      "email": "Draft a highly professional engineering status email. Format it with a bold 'Subject: ...' at the very top, followed by a polite greeting, a bulleted list of key highlights, a section on blockers, and a professional sign-off."
+      "email": "Draft a highly professional engineering status email. Format it with a bold 'Subject: ...' at the very top, followed by a polite greeting, a bulleted list of key highlights, a section on blockers, and a professional sign-off.",
+      "shift-notes": "Generate a structured, professional shift/incident note for a care or support worker. Use these exact sections in order: '📋 Participant(s) Supported', '✅ Activity / What Happened', '⚠️ Behavioural Incidents', '🤝 Support Provided', '🎯 Outcome', and '➡️ Next Shift Handover'. Use a calm, factual, person-centred tone. If a section has no information (e.g. no behavioural incident), write 'None reported' for that section. Do not invent facts that are not present in the answers."
     };
 
     const tonePrompts: Record<string, string> = {
@@ -50,21 +64,45 @@ export async function POST(req: Request) {
       "casual": "Use a friendly, approachable peer-to-peer tone. Like talking to a close teammate on Slack, but keep all technical specifications fully intact and highly clear."
     };
 
-    const formatInstruction = formatPrompts[format] || formatPrompts["handover"];
+    const effectiveFormat = mode === "guided" ? "shift-notes" : (format || "handover");
+    const formatInstruction = formatPrompts[effectiveFormat] || formatPrompts["handover"];
     const toneInstruction = tonePrompts[tone] || tonePrompts["professional"];
+
+    // Build the prompt body depending on mode
+    let promptBody: string;
+    if (mode === "guided") {
+      const a = answers || {};
+      promptBody = `
+You are DraftShift, an expert writer who turns simple worker Q&A into formal, professional shift notes.
+
+The worker has just answered a small number of plain-language questions. Convert those answers into a polished, structured shift note that meets reporting standards.
+
+--- WORKER ANSWERS ---
+- Activity that occurred: ${a.activity || "(not provided)"}
+- Behavioural incident: ${a.behaviour || "(none reported)"}
+- Support provided: ${a.support || "(not provided)"}
+- Outcome: ${a.outcome || "(not provided)"}
+- Additional context (optional): ${a.extra || "(none)"}
+--------------------------------
+`;
+    } else {
+      promptBody = `
+--- RAW NOTES TO TRANSFORM ---
+${notes}
+------------------------------
+`;
+    }
 
     const prompt = `
 You are DraftShift, an expert technical communicator and AI developer assistant.
 Your task is to transform the following raw, messy developer notes, logs, or meeting briefs into a stunning, beautifully formatted markdown document.
 
---- RAW NOTES TO TRANSFORM ---
-${notes}
-------------------------------
+${promptBody}
 
 --- TRANSFORMATION INSTRUCTIONS ---
 1. Format: ${formatInstruction}
 2. Tone: ${toneInstruction}
-3. Presentation: 
+3. Presentation:
    - Use high-quality markdown including bold highlights, bullet points, clean section breaks, and standard HTML code blocks if code is mentioned.
    - Propose clear, sensible names for branches, files, or PRs if they are implied.
    - Group related points together into readable sections.
@@ -91,9 +129,44 @@ ${notes}
 }
 
 // High-fidelity Mock Handoff Transformer
-function generateMockTransformation(notes: string, format: string, tone: string): string {
+function generateMockTransformation(notes: string, format: string, tone: string, answers?: Record<string, string>): string {
   const currentDate = new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-  
+
+  // ---- Guided Q&A mock (shift notes) ----
+  if (format === "shift-notes") {
+    const a = answers || {};
+    const activity = a.activity || "(no activity recorded)";
+    const behaviour = a.behaviour || "None reported";
+    const support = a.support || "(no support recorded)";
+    const outcome = a.outcome || "(no outcome recorded)";
+    const extra = a.extra || "";
+
+    return `# 🩺 Shift Note — ${currentDate}
+*Generated by DraftShift • Tone: ${tone.toUpperCase()} (Sandbox Simulation)*
+
+## 📋 Participant(s) Supported
+- ${extra ? extra.split(/[,\n]/).map((s) => s.trim()).filter(Boolean).join("\n- ") : "Participant details not provided."}
+
+## ✅ Activity / What Happened
+${activity}
+
+## ⚠️ Behavioural Incidents
+${behaviour}
+
+## 🤝 Support Provided
+${support}
+
+## 🎯 Outcome
+${outcome}
+
+## ➡️ Next Shift Handover
+- [ ] Continue to monitor mood and engagement at the start of the next shift.
+- [ ] Review the activity plan with the oncoming worker.
+- [ ] Update the participant's support plan if the incident recurs.
+`;
+  }
+
+  // ---- Existing engineering-format mocks (unchanged) ----
   // Quick analyzer of raw notes to extract key phrases
   const hasDB = /db|database|postgres|sql|prisma/i.test(notes);
   const hasAuth = /auth|login|firebase|jwt|signup/i.test(notes);

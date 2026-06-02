@@ -1,8 +1,32 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useAuth } from "@/context/AuthContext";
-import { Sparkles, Mail, Lock, User, Terminal, ArrowRight, Globe, ShieldAlert, Cpu } from "lucide-react";
+import { 
+  Sparkles, Mail, Lock, User, Terminal, ArrowRight, Globe, ShieldAlert, Cpu, 
+  ChevronLeft, ChevronRight 
+} from "lucide-react";
+
+const SLIDES = [
+  {
+    image: "/hero_slide_1.png",
+    title: "Turn Messy Notes Into Perfect Artifacts",
+    subtitle: "Stop wasting engineering hours. Let Gemini organize your chaotic drafts instantly into clean, structured markdown files, briefs, and release notes.",
+    badge: "DraftShift AI Engine",
+  },
+  {
+    image: "/hero_slide_2.png",
+    title: "Bridge the Gap Between Thoughts & Docs",
+    subtitle: "Maintain clear communication across engineering, QA, and product management without spending hours on manual document formatting.",
+    badge: "Premium Workspace",
+  },
+  {
+    image: "/hero_slide_3.png",
+    title: "High-Performance Developer Desk",
+    subtitle: "Designed with fully custom markdown previews, cloud Firestore history sync, sandbox fallback capability, and selective output tones.",
+    badge: "Cloud & Sandbox Ready",
+  }
+];
 
 export const AuthScreen: React.FC = () => {
   const { login, signup, loginWithGoogle, loginAsDemo, isFallbackMode } = useAuth();
@@ -12,6 +36,26 @@ export const AuthScreen: React.FC = () => {
   const [displayName, setDisplayName] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [loadingForm, setLoadingForm] = useState<boolean>(false);
+
+  // Slider State
+  const [currentSlide, setCurrentSlide] = useState<number>(0);
+  const [isHovering, setIsHovering] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (isHovering) return;
+    const interval = setInterval(() => {
+      setCurrentSlide((prev) => (prev + 1) % SLIDES.length);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [isHovering]);
+
+  const handleNextSlide = () => {
+    setCurrentSlide((prev) => (prev + 1) % SLIDES.length);
+  };
+
+  const handlePrevSlide = () => {
+    setCurrentSlide((prev) => (prev - 1 + SLIDES.length) % SLIDES.length);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,55 +109,118 @@ export const AuthScreen: React.FC = () => {
         style={{ pointerEvents: 'none' }}
       />
 
-      <div className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-12 gap-0 glass-panel rounded-2xl border border-white/10 overflow-hidden shadow-2xl relative z-10">
+      <div className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-12 gap-0 glass-panel rounded-3xl border border-white/10 overflow-hidden shadow-2xl relative z-10">
         
-        {/* Graphic Panel (Left) */}
-        <div className="lg:col-span-5 bg-gradient-to-br from-indigo-950/70 via-slate-900/60 to-purple-950/70 p-8 lg:p-12 flex flex-col justify-between border-b lg:border-b-0 lg:border-r border-white/5 relative overflow-hidden">
-          {/* Subtle line mesh */}
-          <div className="absolute inset-0 bg-radial-gradient from-transparent to-black/40 opacity-70 pointer-events-none" />
+        {/* Graphic Panel (Left) - Wide Image Banner Slider */}
+        <div 
+          className="lg:col-span-7 min-h-[420px] lg:min-h-[640px] relative flex flex-col justify-between p-8 lg:p-12 border-b lg:border-b-0 lg:border-r border-white/5 overflow-hidden group select-none"
+          onMouseEnter={() => setIsHovering(true)}
+          onMouseLeave={() => setIsHovering(false)}
+        >
+          {/* Slides Carousel */}
+          <div className="absolute inset-0 z-0 bg-zinc-950">
+            {SLIDES.map((slide, idx) => (
+              <div
+                key={idx}
+                className={`absolute inset-0 transition-opacity duration-700 ease-in-out bg-cover bg-center ${
+                  idx === currentSlide ? "opacity-100 scale-100 z-10" : "opacity-0 scale-95 pointer-events-none"
+                }`}
+                style={{ 
+                  backgroundImage: `url(${slide.image})`,
+                  transitionProperty: 'opacity, transform'
+                }}
+              >
+                {/* Immersive Dark Vignette Overlay for rich contrast */}
+                <div className="absolute inset-0 bg-gradient-to-t from-black via-black/45 to-black/25" />
+              </div>
+            ))}
+          </div>
           
-          <div className="relative z-10 flex items-center gap-3">
-            <div className="p-2.5 bg-gradient-to-tr from-indigo-500 to-purple-500 rounded-xl shadow-lg shadow-indigo-500/20">
+          {/* Static Branding overlay */}
+          <div className="relative z-20 flex items-center gap-3">
+            <div className="p-2.5 bg-gradient-to-tr from-indigo-500 to-purple-500 rounded-xl shadow-lg shadow-indigo-500/20 backdrop-blur-md">
               <Terminal className="w-6 h-6 text-white" />
             </div>
             <div>
-              <span className="font-bold text-xl tracking-tight bg-gradient-to-r from-white to-zinc-300 bg-clip-text text-transparent">DraftShift</span>
-              <span className="text-xs block text-zinc-500 font-mono">v1.1.0</span>
+              <span className="font-bold text-xl tracking-tight bg-gradient-to-r from-white to-zinc-300 bg-clip-text text-transparent font-bricolage">DraftShift</span>
+              <span className="text-[10px] block text-zinc-400 font-mono font-medium">v1.1.0</span>
             </div>
           </div>
 
-          <div className="relative z-10 my-16 lg:my-0 flex-1 flex flex-col justify-center">
-            <h1 className="text-3xl lg:text-4xl font-extrabold tracking-tight text-white leading-tight mb-4">
-              Turn Messy Notes Into <span className="bg-gradient-to-r from-indigo-400 via-violet-400 to-purple-400 bg-clip-text text-transparent">Perfect Engineering</span> Artifacts.
-            </h1>
-            <p className="text-zinc-400 text-sm lg:text-base leading-relaxed mb-6">
-              Stop wasting engineering hours writing handover logs, standup briefs, and release notes. Let Gemini organize your mental draft instantly.
-            </p>
+          {/* Interactive Navigation Arrows (appear on hover) */}
+          <div className="absolute inset-x-4 top-1/2 -translate-y-1/2 z-30 flex justify-between opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
+            <button
+              onClick={handlePrevSlide}
+              className="p-2.5 rounded-full bg-black/40 hover:bg-black/70 border border-white/10 text-white hover:text-indigo-400 hover:scale-105 active:scale-95 transition backdrop-blur-md cursor-pointer pointer-events-auto shadow-xl"
+              title="Previous Slide"
+            >
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+            <button
+              onClick={handleNextSlide}
+              className="p-2.5 rounded-full bg-black/40 hover:bg-black/70 border border-white/10 text-white hover:text-indigo-400 hover:scale-105 active:scale-95 transition backdrop-blur-md cursor-pointer pointer-events-auto shadow-xl"
+              title="Next Slide"
+            >
+              <ChevronRight className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Slide Text Content & Indicators overlay */}
+          <div className="relative z-20 mt-auto pt-24 space-y-6">
             
-            <div className="flex flex-col gap-3 font-mono text-xs text-zinc-500 bg-black/40 p-4 rounded-xl border border-white/5 backdrop-blur-sm">
-              <div className="flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                <span>100% Client-Side Fallback Capability</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
-                <span>Tailwind CSS v4 Premium Design System</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-purple-500" />
-                <span>Powered by gemini-2.5-flash AI</span>
-              </div>
+            {/* Carousel Content details with clean text animations */}
+            <div className="space-y-3 max-w-xl text-left">
+              {SLIDES.map((slide, idx) => (
+                <div 
+                  key={idx}
+                  className={`transition-all duration-500 ${
+                    idx === currentSlide 
+                      ? "opacity-100 translate-y-0 block animate-fade-in" 
+                      : "opacity-0 translate-y-4 hidden"
+                  }`}
+                >
+                  <span className="text-[10px] font-mono font-bold tracking-widest text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-2.5 py-1 rounded-full inline-block mb-3 uppercase">
+                    {slide.badge}
+                  </span>
+                  
+                  <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold tracking-tight text-white leading-tight font-bricolage mb-2.5">
+                    {slide.title}
+                  </h1>
+                  
+                  <p className="text-zinc-300 text-xs sm:text-sm leading-relaxed font-light">
+                    {slide.subtitle}
+                  </p>
+                </div>
+              ))}
             </div>
+
+            {/* Slide active progress dots */}
+            <div className="flex items-center gap-2 pt-2">
+              {SLIDES.map((_, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => setCurrentSlide(idx)}
+                  className={`h-2 rounded-full transition-all duration-300 cursor-pointer ${
+                    idx === currentSlide 
+                      ? "w-8 bg-gradient-to-r from-indigo-500 to-purple-500" 
+                      : "w-2 bg-white/20 hover:bg-white/40"
+                  }`}
+                  aria-label={`Go to slide ${idx + 1}`}
+                />
+              ))}
+            </div>
+
           </div>
 
-          <div className="relative z-10 pt-4 border-t border-white/5 text-zinc-500 text-xs flex justify-between items-center">
+          {/* Copyright overlay Footer */}
+          <div className="relative z-20 pt-4 mt-6 border-t border-white/10 text-zinc-500 text-[10px] flex justify-between items-center font-mono">
             <span>© 2026 DraftShift Team</span>
             <span>Cloud & Local Sync ready</span>
           </div>
         </div>
 
-        {/* Input Form Panel (Right) */}
-        <div className="lg:col-span-7 p-8 lg:p-12 flex flex-col justify-center bg-zinc-950/40 relative">
+        {/* Input Form Panel (Right) - Elevated & Compact */}
+        <div className="lg:col-span-5 p-8 lg:p-12 flex flex-col justify-center bg-zinc-950/40 relative">
           
           {/* Status Indicator for fallbacks */}
           {isFallbackMode && (

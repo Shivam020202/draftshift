@@ -11,6 +11,8 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   
+  --font-bricolage: var(--font-bricolage-grotesque), sans-serif;
+  
   --color-glass-bg: rgba(20, 20, 25, 0.6);
   --color-glass-border: rgba(255, 255, 255, 0.08);
   --color-glass-hover: rgba(255, 255, 255, 0.12);
@@ -44,6 +46,10 @@ body {
   font-family: var(--font-sans);
   overflow-x: hidden;
   min-height: 100vh;
+}
+
+h1, h2, h3, h4, h5, h6, .font-bricolage {
+  font-family: var(--font-bricolage-grotesque), var(--font-sans), sans-serif;
 }
 
 /* Glassmorphism utility card */

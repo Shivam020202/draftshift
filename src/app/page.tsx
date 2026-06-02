@@ -96,11 +96,11 @@ export default function Home() {
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-zinc-950/40 p-6 rounded-2xl border border-white/5 backdrop-blur-sm">
           <div className="space-y-1 text-left">
             <h2 className="text-xl sm:text-2xl font-black tracking-tight text-white flex items-center gap-2">
-              <span>Engineering Handoff Workspace</span>
+              <span>DraftShift Workspace</span>
               <Sparkles className="w-5 h-5 text-indigo-400 animate-pulse" />
             </h2>
             <p className="text-xs sm:text-sm text-zinc-400">
-              Welcome back, <span className="text-indigo-400 font-semibold">{user.displayName || "Developer Pro"}</span>. Let Gemini transform your chaotic notes into clean engineering handovers.
+              Welcome back, <span className="text-indigo-400 font-semibold">{user.displayName || "Developer Pro"}</span>. Paste messy notes in <span className="text-indigo-300 font-semibold">Free-Form</span> mode, or answer 4 simple questions in <span className="text-emerald-300 font-semibold">Guided Shift Note</span> mode — Gemini turns either into a clean, structured report.
             </p>
           </div>
 
