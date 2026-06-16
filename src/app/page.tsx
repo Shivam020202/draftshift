@@ -6,11 +6,13 @@ import { AuthScreen } from "@/components/AuthScreen";
 import { Navbar } from "@/components/Navbar";
 import { WorkspacePanel } from "@/components/WorkspacePanel";
 import { HistoryFeed, HistoryFeedRef } from "@/components/HistoryFeed";
+import { SavedShiftNotes, SavedShiftNotesRef } from "@/components/SavedShiftNotes";
 import { Sparkles, Terminal, Activity, FileText } from "lucide-react";
 
 export default function Home() {
   const { user, loading, isFallbackMode } = useAuth();
   const historyFeedRef = useRef<HistoryFeedRef>(null);
+  const savedNotesRef = useRef<SavedShiftNotesRef>(null);
 
   // States to hold history items injected into active workspace
   const [activeInput, setActiveInput] = useState<string>("");
@@ -38,6 +40,14 @@ export default function Home() {
 
   const handleClearActiveHistory = () => {
     setActiveInput("");
+    setActiveOutput("");
+    setActiveFormat("");
+    setActiveTone("");
+  };
+
+  // Load a saved shift note into workspace input
+  const handleSelectSavedNote = (content: string) => {
+    setActiveInput(content);
     setActiveOutput("");
     setActiveFormat("");
     setActiveTone("");
@@ -135,11 +145,18 @@ export default function Home() {
             />
           </div>
 
-          {/* History feed (Right 1 column) */}
-          <div className="lg:col-span-1">
+          {/* Right sidebar */}
+          <div className="lg:col-span-1 space-y-6">
+            {/* History feed */}
             <HistoryFeed 
               ref={historyFeedRef}
               onSelectHandoff={handleSelectHandoff}
+            />
+
+            {/* Saved Shift Notes */}
+            <SavedShiftNotes
+              ref={savedNotesRef}
+              onSelectNote={handleSelectSavedNote}
             />
           </div>
 

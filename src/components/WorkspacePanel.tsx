@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef, useCallback, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import { useAuth } from "@/context/AuthContext";
 import { isFirebaseEnabled, db } from "@/lib/firebase";
@@ -17,12 +17,16 @@ import {
   ChevronDown,
   BookOpen,
   AlignLeft,
-  Settings,
-  Terminal,
   ClipboardList,
-  PencilLine
+  PencilLine,
+  Mic,
+  MicOff,
+  FileDown,
+  StickyNote
 } from "lucide-react";
 import { GuidedQA, GuidedAnswers, isGuidedComplete } from "@/components/GuidedQA";
+import html2canvas from "html2canvas";
+import { jsPDF } from "jspdf";
 
 type InputMode = "freeform" | "guided";
 
@@ -101,6 +105,57 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [hasSavedCurrent, setHasSavedCurrent] = useState<boolean>(false);
   const [modelUsed, setModelUsed] = useState<string>("");
+
+  // Voice-to-text states
+  const [isRecording, setIsRecording] = useState<boolean>(false);
+  const [isSpeechSupported, setIsSpeechSupported] = useState<boolean>(false);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
+
+  // PDF export states
+  const [isExportingPdf, setIsExportingPdf] = useState<boolean>(false);
+  const outputRef = useRef<HTMLDivElement>(null);
+
+  // Save Shift Notes states
+  const [isSavingNotes, setIsSavingNotes] = useState<boolean>(false);
+  const [hasSavedNotes, setHasSavedNotes] = useState<boolean>(false);
+
+  // Initialize Speech Recognition on mount
+  useEffect(() => {
+    const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognitionAPI) {
+      setIsSpeechSupported(true);
+      const recognition = new SpeechRecognitionAPI();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = "en-US";
+
+      recognition.onresult = (event: SpeechRecognitionEvent) => {
+        let finalTranscript = "";
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += transcript + " ";
+          }
+        }
+
+        if (finalTranscript) {
+          setRawNotes((prev) => (prev + " " + finalTranscript).trim());
+        }
+      };
+
+      recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+        console.error("Speech recognition error:", event.error);
+        setIsRecording(false);
+      };
+
+      recognition.onend = () => {
+        setIsRecording(false);
+      };
+
+      recognitionRef.current = recognition;
+    }
+  }, []);
 
   // Sync with historical load if selected
   React.useEffect(() => {
@@ -281,6 +336,101 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
     }
   };
 
+  // Toggle voice recording
+  const handleToggleRecording = useCallback(() => {
+    if (!recognitionRef.current) return;
+
+    if (isRecording) {
+      recognitionRef.current.stop();
+      setIsRecording(false);
+    } else {
+      recognitionRef.current.start();
+      setIsRecording(true);
+    }
+  }, [isRecording]);
+
+  // Download Output as PDF
+  const handleDownloadPdf = async () => {
+    if (!transformedOutput || !outputRef.current) return;
+    setIsExportingPdf(true);
+
+    try {
+      const element = outputRef.current;
+      const canvas = await html2canvas(element, {
+        backgroundColor: "#09090b",
+        scale: 2,
+        useCORS: true,
+        logging: false
+      });
+
+      const imgData = canvas.toDataURL("image/png");
+      const pdf = new jsPDF("p", "mm", "a4");
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+      const imgWidth = canvas.width;
+      const imgHeight = canvas.height;
+      const ratio = Math.min(pdfWidth / imgWidth, pdfHeight / imgHeight);
+      const imgX = (pdfWidth - imgWidth * ratio) / 2;
+      const imgY = 0;
+
+      pdf.addImage(imgData, "PNG", imgX, imgY, imgWidth * ratio, imgHeight * ratio);
+      pdf.save(`draftshift-${format}-${Date.now()}.pdf`);
+    } catch (err) {
+      console.error("PDF export failed:", err);
+      setErrorMsg("Failed to export PDF. Please try again.");
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
+  // Save raw shift notes to storage (independent of transformation)
+  const handleSaveShiftNotes = async () => {
+    const notesToSave = mode === "guided"
+      ? [
+          "Q1 — Activity: " + (guidedAnswers.activity || ""),
+          "Q2 — Behavioural incident: " + (guidedAnswers.behaviour || ""),
+          "Q3 — Support provided: " + (guidedAnswers.support || ""),
+          "Q4 — Outcome: " + (guidedAnswers.outcome || ""),
+          guidedAnswers.extra ? "Context: " + guidedAnswers.extra : "",
+        ].filter(Boolean).join("\n")
+      : rawNotes;
+
+    if (!notesToSave.trim()) {
+      return;
+    }
+
+    setIsSavingNotes(true);
+
+    try {
+      const payload = {
+        uid: user?.uid || "local",
+        content: notesToSave,
+        mode,
+        format: mode === "guided" ? "shift-notes" : format,
+        createdAt: new Date().toISOString()
+      };
+
+      if (!isFirebaseEnabled || isFallbackMode) {
+        const key = "draftshift_shift_notes";
+        const existing = JSON.parse(localStorage.getItem(key) || "[]");
+        existing.unshift({ id: `note-${Date.now()}`, ...payload });
+        localStorage.setItem(key, JSON.stringify(existing.slice(0, 50)));
+      } else {
+        await addDoc(collection(db, "shift_notes"), {
+          ...payload,
+          createdAt: serverTimestamp()
+        });
+      }
+
+      setHasSavedNotes(true);
+      setTimeout(() => setHasSavedNotes(false), 3000);
+    } catch (err: unknown) {
+      console.error("Save shift notes failed:", err);
+    } finally {
+      setIsSavingNotes(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
 
@@ -407,18 +557,42 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
               </h3>
             </div>
 
-            <button
-              onClick={() => {
-                setRawNotes("");
-                setGuidedAnswers({ activity: "", behaviour: "", support: "", outcome: "", extra: "" });
-                setTransformedOutput("");
-                setHasSavedCurrent(false);
-                onClearActiveHistory();
-              }}
-              className="text-[10px] uppercase font-bold tracking-wider text-zinc-500 hover:text-zinc-300 transition duration-150"
-            >
-              Clear Workspace
-            </button>
+            <div className="flex items-center gap-2">
+              {/* Save Shift Notes Button */}
+              <button
+                onClick={handleSaveShiftNotes}
+                disabled={isSavingNotes || !(mode === "guided" ? isGuidedComplete(guidedAnswers) : rawNotes.trim())}
+                title="Save shift notes"
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                  hasSavedNotes
+                    ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-400"
+                    : "bg-zinc-900 hover:bg-zinc-800 border border-white/5 text-zinc-400 hover:text-white"
+                }`}
+              >
+                {isSavingNotes ? (
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                ) : hasSavedNotes ? (
+                  <Check className="w-3 h-3" />
+                ) : (
+                  <StickyNote className="w-3 h-3" />
+                )}
+                <span>{hasSavedNotes ? "Saved" : "Save Notes"}</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setRawNotes("");
+                  setGuidedAnswers({ activity: "", behaviour: "", support: "", outcome: "", extra: "" });
+                  setTransformedOutput("");
+                  setHasSavedCurrent(false);
+                  setHasSavedNotes(false);
+                  onClearActiveHistory();
+                }}
+                className="text-[10px] uppercase font-bold tracking-wider text-zinc-500 hover:text-zinc-300 transition duration-150"
+              >
+                Clear Workspace
+              </button>
+            </div>
           </div>
 
           {mode === "guided" ? (
@@ -430,15 +604,37 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
             </div>
           ) : (
             <>
-              <textarea
-                value={rawNotes}
-                onChange={(e) => {
-                  setRawNotes(e.target.value);
-                  setHasSavedCurrent(false);
-                }}
-                placeholder="Type or paste your messy developer logs, terminal outputs, DB migration scripts, or standup blurbs here... (Use the load template dropdown above for a quick test!)"
-                className="flex-1 bg-zinc-950/40 border border-white/5 focus:border-indigo-500/50 rounded-xl p-4 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none resize-none focus:ring-1 focus:ring-indigo-500/20 transition leading-relaxed"
-              />
+              <div className="flex-1 relative">
+                <textarea
+                  value={rawNotes}
+                  onChange={(e) => {
+                    setRawNotes(e.target.value);
+                    setHasSavedCurrent(false);
+                    setHasSavedNotes(false);
+                  }}
+                  placeholder="Type or paste your messy developer logs, terminal outputs, DB migration scripts, or standup blurbs here... (Use the load template dropdown above for a quick test!)"
+                  className="w-full h-full bg-zinc-950/40 border border-white/5 focus:border-indigo-500/50 rounded-xl p-4 pr-12 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none resize-none focus:ring-1 focus:ring-indigo-500/20 transition leading-relaxed"
+                />
+
+                {/* Voice-to-Text Button */}
+                {isSpeechSupported && (
+                  <button
+                    onClick={handleToggleRecording}
+                    title={isRecording ? "Stop recording" : "Start voice input"}
+                    className={`absolute top-3 right-3 p-2 rounded-lg transition cursor-pointer ${
+                      isRecording
+                        ? "bg-red-500/20 border border-red-500/30 text-red-400 animate-pulse"
+                        : "bg-zinc-900/50 border border-white/5 text-zinc-400 hover:text-white hover:bg-zinc-800"
+                    }`}
+                  >
+                    {isRecording ? (
+                      <MicOff className="w-4 h-4" />
+                    ) : (
+                      <Mic className="w-4 h-4" />
+                    )}
+                  </button>
+                )}
+              </div>
 
               <div className="flex items-center justify-between mt-3 text-xs text-zinc-500 font-mono">
                 <div>
@@ -446,7 +642,15 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
                   <span className="mx-2">•</span>
                   <span>Chars: {rawNotes.length}</span>
                 </div>
-                <span className="text-[10px] text-zinc-600">Supports markdown logs</span>
+                <div className="flex items-center gap-3">
+                  {isRecording && (
+                    <span className="text-red-400 flex items-center gap-1">
+                      <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                      Recording...
+                    </span>
+                  )}
+                  <span className="text-[10px] text-zinc-600">Supports markdown logs</span>
+                </div>
               </div>
             </>
           )}
@@ -477,7 +681,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
         </div>
 
         {/* Output Panel (Right) */}
-        <div className="glass-panel rounded-2xl p-5 flex flex-col h-[520px] bg-zinc-950/20 relative">
+        <div className="glass-panel rounded-2xl p-5 flex flex-col h-[520px] bg-zinc-950/20 relative" ref={outputRef}>
           
           <div className="flex items-center justify-between mb-3 border-b border-white/5 pb-2">
             <div className="flex items-center gap-2">
@@ -554,13 +758,27 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
 
               <div className="flex items-center gap-2">
                 
-                {/* Download Button */}
+                {/* Download as Markdown Button */}
                 <button
                   onClick={handleDownloadFile}
                   title="Download as Markdown"
                   className="p-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-white/5 hover:border-white/10 text-zinc-400 hover:text-white active:scale-[0.97] transition duration-200 flex items-center justify-center cursor-pointer"
                 >
                   <Download className="w-4 h-4" />
+                </button>
+
+                {/* Download as PDF Button */}
+                <button
+                  onClick={handleDownloadPdf}
+                  disabled={isExportingPdf}
+                  title="Download as PDF"
+                  className="p-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-white/5 hover:border-white/10 text-zinc-400 hover:text-white active:scale-[0.97] transition duration-200 flex items-center justify-center cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isExportingPdf ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <FileDown className="w-4 h-4" />
+                  )}
                 </button>
 
                 {/* Save To History Button */}
