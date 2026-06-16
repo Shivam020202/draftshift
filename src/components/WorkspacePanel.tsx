@@ -25,7 +25,6 @@ import {
   StickyNote
 } from "lucide-react";
 import { GuidedQA, GuidedAnswers, isGuidedComplete } from "@/components/GuidedQA";
-import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
 
 type InputMode = "freeform" | "guided";
@@ -64,6 +63,7 @@ Need to update the front-end textarea today to enforce max-length as well and sh
 
 interface WorkspacePanelProps {
   onHandoffSaved: () => void;
+  onNotesSaved?: () => void;
   // Load note from history feed into workspace
   activeInput: string;
   activeOutput: string;
@@ -74,6 +74,7 @@ interface WorkspacePanelProps {
 
 export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
   onHandoffSaved,
+  onNotesSaved,
   activeInput,
   activeOutput,
   activeFormat,
@@ -113,7 +114,6 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
 
   // PDF export states
   const [isExportingPdf, setIsExportingPdf] = useState<boolean>(false);
-  const outputRef = useRef<HTMLDivElement>(null);
 
   // Save Shift Notes states
   const [isSavingNotes, setIsSavingNotes] = useState<boolean>(false);
@@ -318,16 +318,43 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
         
         // Slice to max 20 to save storage space
         localStorage.setItem("draftshift_handoffs", JSON.stringify(currentHistory.slice(0, 20)));
+
+        // Also save to shift_notes
+        if (sourceNotes.trim()) {
+          const notesKey = "draftshift_shift_notes";
+          const existing = JSON.parse(localStorage.getItem(notesKey) || "[]");
+          existing.unshift({
+            id: `note-${Date.now()}`,
+            uid: user.uid,
+            content: sourceNotes,
+            mode,
+            format: mode === "guided" ? "shift-notes" : format,
+            createdAt: new Date().toISOString()
+          });
+          localStorage.setItem(notesKey, JSON.stringify(existing.slice(0, 50)));
+        }
       } else {
         // Firestore storage
         await addDoc(collection(db, "handoffs"), {
           ...payload,
           createdAt: serverTimestamp() // Use firebase server timestamp
         });
+
+        // Also save to shift_notes Firestore collection
+        if (sourceNotes.trim()) {
+          await addDoc(collection(db, "shift_notes"), {
+            uid: user.uid,
+            content: sourceNotes,
+            mode,
+            format: mode === "guided" ? "shift-notes" : format,
+            createdAt: serverTimestamp()
+          });
+        }
       }
 
       setHasSavedCurrent(true);
       onHandoffSaved(); // Refresh history feed in parent
+      onNotesSaved?.(); // Refresh saved shift notes in parent
     } catch (err) {
       console.error("Save failed:", err);
       setErrorMsg("Failed to save handoff to history feed.");
@@ -349,31 +376,77 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
     }
   }, [isRecording]);
 
-  // Download Output as PDF
+  // Download Output as PDF (text-based, no DOM screenshot)
   const handleDownloadPdf = async () => {
-    if (!transformedOutput || !outputRef.current) return;
+    if (!transformedOutput) return;
     setIsExportingPdf(true);
 
     try {
-      const element = outputRef.current;
-      const canvas = await html2canvas(element, {
-        backgroundColor: "#09090b",
-        scale: 2,
-        useCORS: true,
-        logging: false
-      });
-
-      const imgData = canvas.toDataURL("image/png");
       const pdf = new jsPDF("p", "mm", "a4");
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = pdf.internal.pageSize.getHeight();
-      const imgWidth = canvas.width;
-      const imgHeight = canvas.height;
-      const ratio = Math.min(pdfWidth / imgWidth, pdfHeight / imgHeight);
-      const imgX = (pdfWidth - imgWidth * ratio) / 2;
-      const imgY = 0;
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 15;
+      const maxWidth = pageWidth - margin * 2;
+      const lineHeight = 5;
+      let y = margin;
 
-      pdf.addImage(imgData, "PNG", imgX, imgY, imgWidth * ratio, imgHeight * ratio);
+      // Strip markdown to readable text
+      const plainText = transformedOutput
+        .replace(/^#{1,6}\s+/gm, "")
+        .replace(/\*\*(.+?)\*\*/g, "$1")
+        .replace(/\*(.+?)\*/g, "$1")
+        .replace(/`{3}[\s\S]*?`{3}/g, (m) => m.replace(/`{3}[^\n]*\n?/g, "").replace(/`{3}/g, ""))
+        .replace(/`(.+?)`/g, "$1")
+        .replace(/^\s*[-*]\s+/gm, "• ")
+        .replace(/^\s*\[x\]\s*/gim, "[x] ")
+        .replace(/^\s*\[\s\]\s*/gim, "[ ] ")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+
+      const lines = pdf.splitTextToSize(plainText, maxWidth);
+
+      // Title
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(10);
+      pdf.setTextColor(100, 100, 100);
+      pdf.text(`DraftShift — ${format.toUpperCase()}`, margin, y);
+      y += 8;
+
+      // Content
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(11);
+      pdf.setTextColor(30, 30, 30);
+
+      for (const line of lines) {
+        if (y + lineHeight > pageHeight - margin) {
+          pdf.addPage();
+          y = margin;
+        }
+
+        // Detect section headers (lines that look like headings)
+        const isHeader = /^(Executive Summary|Completed Work|Blockers|Next Steps|What|Under the Hood|Bug Fixes|Performance|Yesterday|Today|Participants|Activity|Behavioural|Support Provided|Outcome|Handover|Subject)/i.test(line.trim()) ||
+          /^[A-Z][A-Za-z\s&/()]+$/.test(line.trim());
+
+        if (isHeader && line.trim().length > 0) {
+          y += 2;
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(11);
+          pdf.text(line, margin, y);
+          pdf.setFont("helvetica", "normal");
+          pdf.setFontSize(11);
+        } else {
+          pdf.text(line, margin, y);
+        }
+
+        y += lineHeight;
+      }
+
+      // Footer on last page
+      const footerY = pageHeight - 10;
+      pdf.setFontSize(8);
+      pdf.setTextColor(150, 150, 150);
+      pdf.text("Generated by DraftShift", margin, footerY);
+
       pdf.save(`draftshift-${format}-${Date.now()}.pdf`);
     } catch (err) {
       console.error("PDF export failed:", err);
@@ -424,6 +497,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
 
       setHasSavedNotes(true);
       setTimeout(() => setHasSavedNotes(false), 3000);
+      onNotesSaved?.();
     } catch (err: unknown) {
       console.error("Save shift notes failed:", err);
     } finally {
@@ -681,7 +755,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
         </div>
 
         {/* Output Panel (Right) */}
-        <div className="glass-panel rounded-2xl p-5 flex flex-col h-[520px] bg-zinc-950/20 relative" ref={outputRef}>
+        <div className="glass-panel rounded-2xl p-5 flex flex-col h-[520px] bg-zinc-950/20 relative">
           
           <div className="flex items-center justify-between mb-3 border-b border-white/5 pb-2">
             <div className="flex items-center gap-2">

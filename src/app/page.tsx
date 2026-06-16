@@ -25,6 +25,11 @@ export default function Home() {
     historyFeedRef.current?.refreshHistory();
   };
 
+  // Notify SavedShiftNotes to fetch updated listings
+  const handleNotesSaved = () => {
+    savedNotesRef.current?.refresh();
+  };
+
   // Load a historical item back into workspace
   const handleSelectHandoff = (
     rawNotes: string,
@@ -137,6 +142,7 @@ export default function Home() {
           <div className="lg:col-span-3">
             <WorkspacePanel 
               onHandoffSaved={handleHandoffSaved}
+              onNotesSaved={handleNotesSaved}
               activeInput={activeInput}
               activeOutput={activeOutput}
               activeFormat={activeFormat}
