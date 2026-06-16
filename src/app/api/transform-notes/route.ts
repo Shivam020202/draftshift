@@ -1,6 +1,44 @@
 import { NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
+const MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"];
+const MAX_RETRIES = 3;
+
+async function generateWithRetry(
+  genAI: GoogleGenerativeAI,
+  prompt: string
+): Promise<{ text: string; model: string }> {
+  let lastError: Error | null = null;
+
+  for (const modelName of MODELS) {
+    const model = genAI.getGenerativeModel({
+      model: modelName,
+      generationConfig: { temperature: 0.2 }
+    });
+
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        return { text: response.text(), model: modelName };
+      } catch (err: unknown) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        const isOverloaded = lastError.message.includes("503") || lastError.message.includes("overloaded") || lastError.message.includes("high demand");
+
+        if (!isOverloaded || attempt === MAX_RETRIES - 1) {
+          break; // Not a retryable error or last attempt — try next model
+        }
+
+        // Exponential backoff: 1s, 2s, 4s
+        const delay = Math.pow(2, attempt) * 1000;
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+  }
+
+  throw lastError || new Error("All models failed after retries");
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
@@ -42,12 +80,6 @@ export async function POST(req: Request) {
 
     // Initialize Gemini AI
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash",
-      generationConfig: {
-        temperature: 0.2, // Keep it highly structured and deterministic
-      }
-    });
 
     const formatPrompts: Record<string, string> = {
       "handover": "Create an ultra-premium Shift Handover report. Organize it with these exact sections: '🚀 Executive Summary', '📦 Completed Work', '⚠️ Blockers & Risks', and '📅 Next Steps / Handover Checklist'.",
@@ -109,14 +141,12 @@ ${promptBody}
    - Do NOT include any meta-talk or introductory conversational filler like "Here is your transformed handover..." or "Sure, I can help with that...". Output ONLY the fully formatted markdown document directly.
 `;
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const transformedText = response.text();
+    const result = await generateWithRetry(genAI, prompt);
 
     return NextResponse.json({
-      text: transformedText,
+      text: result.text,
       isMock: false,
-      model: "gemini-2.5-flash"
+      model: result.model
     });
 
   } catch (error: any) {
