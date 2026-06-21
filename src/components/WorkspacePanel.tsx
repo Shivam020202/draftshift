@@ -25,7 +25,9 @@ import {
   StickyNote,
   MessagesSquare,
   CornerDownRight,
-  X
+  X,
+  Send,
+  FileSignature
 } from "lucide-react";
 import { GuidedQA, GuidedAnswers, isGuidedComplete } from "@/components/GuidedQA";
 import { PersonTagInput } from "@/components/PersonTagInput";
@@ -537,6 +539,71 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
     }
   };
 
+  // Send a reply into the active thread. Prefers the AI-transformed output
+  // (the polished version in the right pane) and falls back to the raw
+  // input if no transform has run yet. Attaches the active reply parent so
+  // it joins the thread instead of starting a new one.
+  const [isSendingReply, setIsSendingReply] = useState<boolean>(false);
+  const [lastReplyWasSent, setLastReplyWasSent] = useState<boolean>(false);
+
+  const handleSendReply = async () => {
+    if (!activeReplyParentId) return;
+
+    // Prefer the transformed output. Fall back to the raw input / guided
+    // answers if the user hasn't clicked Transform Draft yet.
+    const transformed = (transformedOutput || "").trim();
+    const rawFallback = mode === "guided"
+      ? [
+          "Q1 — Activity: " + (guidedAnswers.activity || ""),
+          "Q2 — Behavioural incident: " + (guidedAnswers.behaviour || ""),
+          "Q3 — Support provided: " + (guidedAnswers.support || ""),
+          "Q4 — Outcome: " + (guidedAnswers.outcome || ""),
+          guidedAnswers.extra ? "Context: " + guidedAnswers.extra : "",
+        ].filter(Boolean).join("\n")
+      : rawNotes;
+
+    const replyContent = transformed || rawFallback;
+    if (!replyContent.trim()) return;
+
+    setIsSendingReply(true);
+
+    try {
+      const threadId = activeReplyThreadId || generateThreadId();
+      const payload = {
+        uid: user?.uid || "local",
+        content: replyContent,
+        mode,
+        format: mode === "guided" ? "shift-notes" : format,
+        createdAt: new Date().toISOString(),
+        tags,
+        parentId: activeReplyParentId,
+        threadId
+      };
+
+      if (!isFirebaseEnabled || isFallbackMode) {
+        const key = "draftshift_shift_notes";
+        const existing = JSON.parse(localStorage.getItem(key) || "[]");
+        existing.unshift({ id: `note-${Date.now()}`, ...payload });
+        localStorage.setItem(key, JSON.stringify(existing.slice(0, 50)));
+      } else {
+        await addDoc(collection(db, "shift_notes"), {
+          ...payload,
+          createdAt: serverTimestamp()
+        });
+      }
+
+      setLastReplyWasSent(true);
+      setTimeout(() => setLastReplyWasSent(false), 3000);
+      onNotesSaved?.();
+      setTags([]);
+      onCancelReply();
+    } catch (err: unknown) {
+      console.error("Send reply failed:", err);
+    } finally {
+      setIsSendingReply(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
 
@@ -675,26 +742,68 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
             </div>
 
             <div className="flex items-center gap-2">
-              {/* Save Shift Notes Button */}
-              <button
-                onClick={handleSaveShiftNotes}
-                disabled={isSavingNotes || !(mode === "guided" ? isGuidedComplete(guidedAnswers) : rawNotes.trim())}
-                title="Save shift notes"
-                className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-                  hasSavedNotes
-                    ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-400"
-                    : "bg-zinc-900 hover:bg-zinc-800 border border-white/5 text-zinc-400 hover:text-white"
-                }`}
-              >
-                {isSavingNotes ? (
-                  <RefreshCw className="w-3 h-3 animate-spin" />
-                ) : hasSavedNotes ? (
-                  <Check className="w-3 h-3" />
-                ) : (
-                  <StickyNote className="w-3 h-3" />
-                )}
-                <span>{hasSavedNotes ? "Saved" : "Save Notes"}</span>
-              </button>
+              {activeReplyParentId ? (
+                <>
+                  {/* Send Reply — primary action when replying */}
+                  <button
+                    onClick={handleSendReply}
+                    disabled={
+                      isSendingReply ||
+                      !(transformedOutput || "").trim() &&
+                        !(mode === "guided" ? isGuidedComplete(guidedAnswers) : rawNotes.trim())
+                    }
+                    title={transformedOutput ? "Send the AI-processed output into this thread" : "No transform yet — click Transform Draft first, or send raw input"}
+                    className={`px-3 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                      lastReplyWasSent
+                        ? "bg-emerald-500/15 border border-emerald-500/30 text-emerald-300"
+                        : "bg-gradient-to-r from-indigo-500 to-purple-500 hover:from-indigo-400 hover:to-purple-400 border border-indigo-400/40 text-white shadow-md shadow-indigo-500/20"
+                    }`}
+                  >
+                    {isSendingReply ? (
+                      <RefreshCw className="w-3 h-3 animate-spin" />
+                    ) : lastReplyWasSent ? (
+                      <Check className="w-3 h-3" />
+                    ) : (
+                      <Send className="w-3 h-3" />
+                    )}
+                    <span>{lastReplyWasSent ? "Reply Sent" : "Send Reply"}</span>
+                  </button>
+
+                  {/* Secondary: save raw draft (no thread) */}
+                  <button
+                    onClick={handleSaveShiftNotes}
+                    disabled={isSavingNotes || !(mode === "guided" ? isGuidedComplete(guidedAnswers) : rawNotes.trim())}
+                    title="Save the raw notes as a separate note"
+                    className="px-2.5 py-1.5 rounded-lg text-[10px] font-semibold flex items-center gap-1.5 transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed bg-zinc-900/70 hover:bg-zinc-800 border border-white/5 text-zinc-400 hover:text-white"
+                  >
+                    {hasSavedNotes ? <Check className="w-3 h-3 text-emerald-400" /> : <FileSignature className="w-3 h-3" />}
+                    <span>{hasSavedNotes ? "Draft Saved" : "Save Draft"}</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  {/* Save Shift Notes Button — saves raw notes (starts a new thread) */}
+                  <button
+                    onClick={handleSaveShiftNotes}
+                    disabled={isSavingNotes || !(mode === "guided" ? isGuidedComplete(guidedAnswers) : rawNotes.trim())}
+                    title="Save the raw notes as a new thread"
+                    className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                      hasSavedNotes
+                        ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-400"
+                        : "bg-zinc-900 hover:bg-zinc-800 border border-white/5 text-zinc-400 hover:text-white"
+                    }`}
+                  >
+                    {isSavingNotes ? (
+                      <RefreshCw className="w-3 h-3 animate-spin" />
+                    ) : hasSavedNotes ? (
+                      <Check className="w-3 h-3" />
+                    ) : (
+                      <StickyNote className="w-3 h-3" />
+                    )}
+                    <span>{hasSavedNotes ? "Saved" : "Save Notes"}</span>
+                  </button>
+                </>
+              )}
 
               <button
                 onClick={() => {
@@ -709,31 +818,46 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
                 }}
                 className="text-[10px] uppercase font-bold tracking-wider text-zinc-500 hover:text-zinc-300 transition duration-150"
               >
-                Clear Workspace
+                {activeReplyParentId ? "Cancel Reply" : "Clear Workspace"}
               </button>
             </div>
           </div>
 
           {/* Reply banner — shown when the user is replying to a saved note */}
           {activeReplyParentId && (
-            <div className="mb-3 flex items-start gap-2 p-2.5 rounded-lg bg-indigo-500/5 border border-indigo-500/20">
-              <CornerDownRight className="w-3.5 h-3.5 text-indigo-400 mt-0.5 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <p className="text-[10px] font-mono uppercase tracking-wider text-indigo-300">
-                  Replying to thread
-                </p>
-                <p className="text-[11px] text-zinc-300 line-clamp-2 leading-relaxed mt-0.5">
-                  {replyParentPreview || "(no preview)"}
-                </p>
+            <div className="mb-4 rounded-xl bg-gradient-to-br from-indigo-500/10 to-purple-500/5 border border-indigo-500/30 shadow-lg shadow-indigo-500/5 overflow-hidden">
+              <div className="flex items-start gap-3 p-3.5">
+                <div className="p-1.5 rounded-lg bg-indigo-500/20 border border-indigo-500/30 shrink-0">
+                  <CornerDownRight className="w-4 h-4 text-indigo-300" />
+                </div>
+                <div className="flex-1 min-w-0 space-y-1.5">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-indigo-300">
+                      Replying to thread
+                    </span>
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-mono bg-emerald-500/10 border border-emerald-500/20 text-emerald-300">
+                      <Sparkles className="w-2.5 h-2.5" />
+                      {transformedOutput ? "Will send AI-processed output" : "Will send raw input (no transform yet)"}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-zinc-300 line-clamp-3 leading-relaxed">
+                    {replyParentPreview || "(no preview)"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={onCancelReply}
+                  title="Cancel reply"
+                  className="p-1.5 rounded-md text-zinc-500 hover:text-rose-300 hover:bg-rose-500/10 transition cursor-pointer shrink-0"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={onCancelReply}
-                title="Cancel reply"
-                className="p-1 rounded text-zinc-500 hover:text-rose-300 transition cursor-pointer shrink-0"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
+              {/* Reminder strip — explains the two-button flow below */}
+              <div className="px-3.5 py-2 border-t border-indigo-500/15 bg-indigo-500/5 text-[10px] text-zinc-400 flex items-center gap-1.5">
+                <Send className="w-3 h-3 text-indigo-400" />
+                <span>Click <span className="font-semibold text-indigo-300">Send Reply</span> below to post your AI-processed output into this thread.</span>
+              </div>
             </div>
           )}
 
@@ -741,7 +865,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
           <div className="mb-3">
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500">
-                Tag people (optional)
+                {activeReplyParentId ? "Tag people on this reply" : "Tag people (optional)"}
               </span>
               {tags.length > 0 && (
                 <span className="text-[9px] font-mono text-zinc-600">
@@ -830,7 +954,15 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
               ) : (
                 <>
                   <Sparkles className="w-4 h-4 text-indigo-200 group-hover:scale-110 transition duration-200" />
-                  <span>{mode === "guided" ? "Generate Shift Note" : "Transform Draft"}</span>
+                  <span>
+                    {activeReplyParentId
+                      ? mode === "guided"
+                        ? "Generate Reply"
+                        : "Transform Reply"
+                      : mode === "guided"
+                        ? "Generate Shift Note"
+                        : "Transform Draft"}
+                  </span>
                 </>
               )}
             </button>
@@ -838,12 +970,26 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
         </div>
 
         {/* Output Panel (Right) */}
-        <div className="glass-panel rounded-2xl p-5 flex flex-col h-[520px] bg-zinc-950/20 relative">
-          
+        <div
+          className={`glass-panel rounded-2xl p-5 flex flex-col h-[520px] bg-zinc-950/20 relative transition ${
+            activeReplyParentId
+              ? "ring-2 ring-indigo-500/30 shadow-xl shadow-indigo-500/10"
+              : ""
+          }`}
+        >
+
           <div className="flex items-center justify-between mb-3 border-b border-white/5 pb-2">
             <div className="flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-purple-400" />
-              <h3 className="text-sm font-bold text-white tracking-wide uppercase">AI Processed Output</h3>
+              <h3 className="text-sm font-bold text-white tracking-wide uppercase">
+                {activeReplyParentId ? "Reply Output" : "AI Processed Output"}
+              </h3>
+              {activeReplyParentId && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-mono bg-indigo-500/10 border border-indigo-500/20 text-indigo-300">
+                  <Send className="w-2.5 h-2.5" />
+                  Sent when you click Send Reply
+                </span>
+              )}
             </div>
 
             {/* Display Model used if output is generated */}
