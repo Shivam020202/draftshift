@@ -7,7 +7,9 @@ import { Navbar } from "@/components/Navbar";
 import { WorkspacePanel } from "@/components/WorkspacePanel";
 import { HistoryFeed, HistoryFeedRef } from "@/components/HistoryFeed";
 import { SavedShiftNotes, SavedShiftNotesRef } from "@/components/SavedShiftNotes";
+import { ThreadModal } from "@/components/ThreadModal";
 import { Sparkles, Terminal, Activity, FileText } from "lucide-react";
+import { SavedNote } from "@/lib/noteTypes";
 
 export default function Home() {
   const { user, loading, isFallbackMode } = useAuth();
@@ -20,6 +22,14 @@ export default function Home() {
   const [activeFormat, setActiveFormat] = useState<string>("");
   const [activeTone, setActiveTone] = useState<string>("");
 
+  // Threading state — drives the reply banner in WorkspacePanel and the
+  // modal's default selection.
+  const [activeReplyParentId, setActiveReplyParentId] = useState<string | null>(null);
+  const [activeReplyThreadId, setActiveReplyThreadId] = useState<string | null>(null);
+  const [replyParentPreview, setReplyParentPreview] = useState<string | null>(null);
+  const [threadsOpen, setThreadsOpen] = useState<boolean>(false);
+  const [initialThreadId, setInitialThreadId] = useState<string | null>(null);
+
   // Notify HistoryFeed to fetch updated listings
   const handleHandoffSaved = () => {
     historyFeedRef.current?.refreshHistory();
@@ -28,6 +38,34 @@ export default function Home() {
   // Notify SavedShiftNotes to fetch updated listings
   const handleNotesSaved = () => {
     savedNotesRef.current?.refresh();
+  };
+
+  const handleOpenThreads = () => {
+    setThreadsOpen(true);
+  };
+
+  const handleCloseThreads = () => {
+    setThreadsOpen(false);
+    setInitialThreadId(null);
+  };
+
+  const handleCancelReply = () => {
+    setActiveReplyParentId(null);
+    setActiveReplyThreadId(null);
+    setReplyParentPreview(null);
+  };
+
+  const handleRequestReply = (note: SavedNote) => {
+    setActiveReplyParentId(note.id);
+    setActiveReplyThreadId(note.threadId || null);
+    setReplyParentPreview((note.content || "").slice(0, 140));
+    // Close the modal so the user sees the workspace with the reply banner.
+    setThreadsOpen(false);
+  };
+
+  const handleViewThread = (note: SavedNote) => {
+    setInitialThreadId(note.threadId || null);
+    setThreadsOpen(true);
   };
 
   // Load a historical item back into workspace
@@ -140,7 +178,7 @@ export default function Home() {
           
           {/* Main workspace (Left 3 columns) */}
           <div className="lg:col-span-3">
-            <WorkspacePanel 
+            <WorkspacePanel
               onHandoffSaved={handleHandoffSaved}
               onNotesSaved={handleNotesSaved}
               activeInput={activeInput}
@@ -148,13 +186,18 @@ export default function Home() {
               activeFormat={activeFormat}
               activeTone={activeTone}
               onClearActiveHistory={handleClearActiveHistory}
+              activeReplyParentId={activeReplyParentId}
+              activeReplyThreadId={activeReplyThreadId}
+              replyParentPreview={replyParentPreview}
+              onOpenThreads={handleOpenThreads}
+              onCancelReply={handleCancelReply}
             />
           </div>
 
           {/* Right sidebar */}
           <div className="lg:col-span-1 space-y-6">
             {/* History feed */}
-            <HistoryFeed 
+            <HistoryFeed
               ref={historyFeedRef}
               onSelectHandoff={handleSelectHandoff}
             />
@@ -163,12 +206,25 @@ export default function Home() {
             <SavedShiftNotes
               ref={savedNotesRef}
               onSelectNote={handleSelectSavedNote}
+              onReplyRequest={handleRequestReply}
+              onViewThread={handleViewThread}
             />
           </div>
 
         </div>
 
       </div>
+
+      {/* Threads modal — full-screen overlay */}
+      <ThreadModal
+        isOpen={threadsOpen}
+        initialThreadId={initialThreadId}
+        onClose={handleCloseThreads}
+        onReply={handleRequestReply}
+        onAfterDelete={() => {
+          savedNotesRef.current?.refresh();
+        }}
+      />
     </main>
   );
 }

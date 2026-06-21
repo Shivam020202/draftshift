@@ -22,9 +22,14 @@ import {
   Mic,
   MicOff,
   FileDown,
-  StickyNote
+  StickyNote,
+  MessagesSquare,
+  CornerDownRight,
+  X
 } from "lucide-react";
 import { GuidedQA, GuidedAnswers, isGuidedComplete } from "@/components/GuidedQA";
+import { PersonTagInput } from "@/components/PersonTagInput";
+import { generateThreadId } from "@/lib/noteThreads";
 import { jsPDF } from "jspdf";
 
 type InputMode = "freeform" | "guided";
@@ -70,6 +75,12 @@ interface WorkspacePanelProps {
   activeFormat: string;
   activeTone: string;
   onClearActiveHistory: () => void;
+  // Threading — controlled by parent (page.tsx).
+  activeReplyParentId: string | null;
+  activeReplyThreadId: string | null;
+  replyParentPreview: string | null;
+  onOpenThreads: () => void;
+  onCancelReply: () => void;
 }
 
 export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
@@ -79,7 +90,12 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
   activeOutput,
   activeFormat,
   activeTone,
-  onClearActiveHistory
+  onClearActiveHistory,
+  activeReplyParentId,
+  activeReplyThreadId,
+  replyParentPreview,
+  onOpenThreads,
+  onCancelReply
 }) => {
   const { user, isFallbackMode } = useAuth();
 
@@ -118,6 +134,9 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
   // Save Shift Notes states
   const [isSavingNotes, setIsSavingNotes] = useState<boolean>(false);
   const [hasSavedNotes, setHasSavedNotes] = useState<boolean>(false);
+
+  // Tags for the current note (person names being passed onto)
+  const [tags, setTags] = useState<string[]>([]);
 
   // Initialize Speech Recognition on mount
   useEffect(() => {
@@ -475,12 +494,22 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
     setIsSavingNotes(true);
 
     try {
+      // Threading: if a reply parent is active, attach this note to that
+      // thread. Otherwise start a brand-new thread.
+      const parentId = activeReplyParentId;
+      const threadId = parentId
+        ? activeReplyThreadId || generateThreadId()
+        : generateThreadId();
+
       const payload = {
         uid: user?.uid || "local",
         content: notesToSave,
         mode,
         format: mode === "guided" ? "shift-notes" : format,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        tags,
+        parentId,
+        threadId
       };
 
       if (!isFirebaseEnabled || isFallbackMode) {
@@ -498,6 +527,9 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
       setHasSavedNotes(true);
       setTimeout(() => setHasSavedNotes(false), 3000);
       onNotesSaved?.();
+      // Reset tags + reply state so the workspace is clean for the next note.
+      setTags([]);
+      onCancelReply();
     } catch (err: unknown) {
       console.error("Save shift notes failed:", err);
     } finally {
@@ -508,43 +540,54 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
   return (
     <div className="space-y-6">
 
-      {/* Mode Toggle (Free-Form vs Guided Q&A) */}
+      {/* Mode Toggle (Free-Form vs Guided Q&A) + Threads button */}
       <div className="glass-panel p-3 rounded-xl flex flex-wrap items-center gap-3 justify-between">
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Input mode</span>
         </div>
-        <div className="inline-flex p-1 bg-zinc-900/70 border border-white/10 rounded-xl gap-1">
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="inline-flex p-1 bg-zinc-900/70 border border-white/10 rounded-xl gap-1">
+            <button
+              type="button"
+              onClick={() => {
+                setMode("freeform");
+                setErrorMsg(null);
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                mode === "freeform"
+                  ? "bg-indigo-500/15 text-indigo-200 border border-indigo-500/30"
+                  : "text-zinc-400 hover:text-white border border-transparent"
+              }`}
+              title="Paste free-form messy notes and let the AI restructure them"
+            >
+              <PencilLine className="w-3.5 h-3.5" />
+              <span>Free-Form Notes</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setMode("guided");
+                setErrorMsg(null);
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                mode === "guided"
+                  ? "bg-emerald-500/15 text-emerald-200 border border-emerald-500/30"
+                  : "text-zinc-400 hover:text-white border border-transparent"
+              }`}
+              title="Answer 4 simple questions and the AI generates a structured shift note"
+            >
+              <ClipboardList className="w-3.5 h-3.5" />
+              <span>Guided Shift Note</span>
+            </button>
+          </div>
           <button
             type="button"
-            onClick={() => {
-              setMode("freeform");
-              setErrorMsg(null);
-            }}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
-              mode === "freeform"
-                ? "bg-indigo-500/15 text-indigo-200 border border-indigo-500/30"
-                : "text-zinc-400 hover:text-white border border-transparent"
-            }`}
-            title="Paste free-form messy notes and let the AI restructure them"
+            onClick={onOpenThreads}
+            title="View thread conversations"
+            className="px-3 py-1.5 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 transition cursor-pointer bg-zinc-900/70 border border-white/10 text-zinc-300 hover:text-white hover:border-indigo-500/30"
           >
-            <PencilLine className="w-3.5 h-3.5" />
-            <span>Free-Form Notes</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setMode("guided");
-              setErrorMsg(null);
-            }}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
-              mode === "guided"
-                ? "bg-emerald-500/15 text-emerald-200 border border-emerald-500/30"
-                : "text-zinc-400 hover:text-white border border-transparent"
-            }`}
-            title="Answer 4 simple questions and the AI generates a structured shift note"
-          >
-            <ClipboardList className="w-3.5 h-3.5" />
-            <span>Guided Shift Note</span>
+            <MessagesSquare className="w-3.5 h-3.5 text-indigo-400" />
+            <span>Threads</span>
           </button>
         </div>
       </div>
@@ -660,13 +703,53 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
                   setTransformedOutput("");
                   setHasSavedCurrent(false);
                   setHasSavedNotes(false);
+                  setTags([]);
                   onClearActiveHistory();
+                  onCancelReply();
                 }}
                 className="text-[10px] uppercase font-bold tracking-wider text-zinc-500 hover:text-zinc-300 transition duration-150"
               >
                 Clear Workspace
               </button>
             </div>
+          </div>
+
+          {/* Reply banner — shown when the user is replying to a saved note */}
+          {activeReplyParentId && (
+            <div className="mb-3 flex items-start gap-2 p-2.5 rounded-lg bg-indigo-500/5 border border-indigo-500/20">
+              <CornerDownRight className="w-3.5 h-3.5 text-indigo-400 mt-0.5 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-[10px] font-mono uppercase tracking-wider text-indigo-300">
+                  Replying to thread
+                </p>
+                <p className="text-[11px] text-zinc-300 line-clamp-2 leading-relaxed mt-0.5">
+                  {replyParentPreview || "(no preview)"}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={onCancelReply}
+                title="Cancel reply"
+                className="p-1 rounded text-zinc-500 hover:text-rose-300 transition cursor-pointer shrink-0"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
+          {/* Tag input — person(s) the note is being passed onto */}
+          <div className="mb-3">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500">
+                Tag people (optional)
+              </span>
+              {tags.length > 0 && (
+                <span className="text-[9px] font-mono text-zinc-600">
+                  {tags.length} tagged
+                </span>
+              )}
+            </div>
+            <PersonTagInput value={tags} onChange={setTags} />
           </div>
 
           {mode === "guided" ? (

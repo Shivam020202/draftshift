@@ -18,19 +18,17 @@ import {
   Trash2,
   ArrowUpRight,
   Calendar,
-  FileText
+  FileText,
+  CornerDownRight,
+  MessagesSquare
 } from "lucide-react";
-
-export interface SavedNote {
-  id: string;
-  content: string;
-  mode: string;
-  format: string;
-  createdAt: string;
-}
+import { SavedNote } from "@/lib/noteTypes";
+import { normalizeNote } from "@/lib/noteThreads";
 
 interface SavedShiftNotesProps {
   onSelectNote: (content: string) => void;
+  onReplyRequest?: (note: SavedNote) => void;
+  onViewThread?: (note: SavedNote) => void;
 }
 
 export interface SavedShiftNotesRef {
@@ -38,7 +36,7 @@ export interface SavedShiftNotesRef {
 }
 
 export const SavedShiftNotes = forwardRef<SavedShiftNotesRef, SavedShiftNotesProps>(
-  ({ onSelectNote }, ref) => {
+  ({ onSelectNote, onReplyRequest, onViewThread }, ref) => {
     const { user, isFallbackMode } = useAuth();
     const [notes, setNotes] = useState<SavedNote[]>([]);
     const [loading, setLoading] = useState<boolean>(true);
@@ -60,13 +58,9 @@ export const SavedShiftNotes = forwardRef<SavedShiftNotesRef, SavedShiftNotesPro
         if (!isFirebaseEnabled || isFallbackMode) {
           const raw = localStorage.getItem("draftshift_shift_notes") || "[]";
           const items = JSON.parse(raw);
-          const formatted: SavedNote[] = items.map((item: Record<string, unknown>) => ({
-            id: (item.id as string) || `local-${Date.now()}`,
-            content: (item.content as string) || "",
-            mode: (item.mode as string) || "freeform",
-            format: (item.format as string) || "handover",
-            createdAt: (item.createdAt as string) || new Date().toISOString()
-          }));
+          const formatted: SavedNote[] = items.map((item: Record<string, unknown>) =>
+            normalizeNote(item)
+          );
           setNotes(formatted.slice(0, 10));
         } else {
           const q = query(
@@ -86,13 +80,13 @@ export const SavedShiftNotes = forwardRef<SavedShiftNotesRef, SavedShiftNotesPro
                   ? data.createdAt.toDate().toISOString()
                   : new Date(data.createdAt).toISOString();
             }
-            items.push({
-              id: docSnap.id,
-              content: data.content || "",
-              mode: data.mode || "freeform",
-              format: data.format || "handover",
-              createdAt: dateStr
-            });
+            items.push(
+              normalizeNote({
+                ...data,
+                id: docSnap.id,
+                createdAt: dateStr
+              })
+            );
           });
           setNotes(items);
         }
@@ -186,6 +180,11 @@ export const SavedShiftNotes = forwardRef<SavedShiftNotesRef, SavedShiftNotesPro
                       <span className="px-1.5 py-0.5 rounded text-[9px] font-mono uppercase font-semibold border bg-amber-500/10 border-amber-500/20 text-amber-300">
                         {note.mode === "guided" ? "guided" : note.format}
                       </span>
+                      {note.parentId && (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono uppercase font-semibold border bg-sky-500/10 border-sky-500/20 text-sky-300">
+                          Reply
+                        </span>
+                      )}
                       <span className="text-[10px] text-zinc-500 font-mono flex items-center gap-1">
                         <Calendar className="w-2.5 h-2.5" />
                         {formatDate(note.createdAt)}
@@ -194,9 +193,50 @@ export const SavedShiftNotes = forwardRef<SavedShiftNotesRef, SavedShiftNotesPro
                     <p className="text-xs text-zinc-400 group-hover:text-zinc-200 transition line-clamp-2 leading-relaxed">
                       {note.content || "No content."}
                     </p>
+                    {(note.tags && note.tags.length > 0) && (
+                      <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                        {note.tags.slice(0, 3).map((tag, i) => (
+                          <span
+                            key={`${tag}-${i}`}
+                            className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-indigo-500/10 border border-indigo-500/20 text-indigo-300"
+                          >
+                            @{tag}
+                          </span>
+                        ))}
+                        {note.tags.length > 3 && (
+                          <span className="text-[9px] font-mono text-zinc-500">
+                            +{note.tags.length - 3}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-1 shrink-0">
+                    {onReplyRequest && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onReplyRequest(note);
+                        }}
+                        title="Reply to this note"
+                        className="p-1.5 rounded bg-zinc-950 border border-white/5 hover:border-indigo-500/20 hover:bg-indigo-500/10 text-zinc-500 hover:text-indigo-300 transition cursor-pointer"
+                      >
+                        <CornerDownRight className="w-3 h-3" />
+                      </button>
+                    )}
+                    {onViewThread && note.threadId && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onViewThread(note);
+                        }}
+                        title="View thread"
+                        className="p-1.5 rounded bg-zinc-950 border border-white/5 hover:border-purple-500/20 hover:bg-purple-500/10 text-zinc-500 hover:text-purple-300 transition cursor-pointer"
+                      >
+                        <MessagesSquare className="w-3 h-3" />
+                      </button>
+                    )}
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
